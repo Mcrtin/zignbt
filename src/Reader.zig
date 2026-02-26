@@ -169,7 +169,6 @@ pub fn innerParse(self: Self, T: type, tag: TagType, alloc: ?std.mem.Allocator) 
             } else return error.WrongTag;
         },
         .array => |arr| {
-            //TODO str
             if (try self.takeChildTag(tag)) |child| {
                 if (try self.takeLen() != arr.len) return error.SizeError;
                 var res: [arr.len]arr.child = undefined;
