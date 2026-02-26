@@ -3,6 +3,29 @@ const TagType = @import("tag.zig").TagType;
 const meta_util = @import("util.zig");
 pub const Error = std.mem.Allocator.Error || std.Io.Writer.Error || error{CastError};
 
+/// Serializes `val` as an NBT root compound into `w`.
+///
+/// This function writes:
+/// 1. A `.Compound` tag type.
+/// 2. An optional empty root name (if `write_name` is `true`).
+/// 3. The encoded contents of `val`.
+///
+/// The root value is always encoded as a compound, matching the
+/// standard NBT file format convention.
+///
+/// Type requirements:
+/// - `val` must be representable as an NBT compound.
+/// - Structs are encoded as compounds.
+/// - Types may provide a custom `writeNbt(Self)` method to override
+///   the default encoding logic.
+///
+/// Errors:
+/// - Propagates writer errors.
+/// - Returns `error.CastError` if integer narrowing fails.
+/// - May emit compile errors for unsupported types.
+///
+/// This is the main entry point for writing strongly-typed Zig values
+/// into NBT format.
 pub fn write(w: *std.Io.Writer, val: anytype, write_name: bool) !void {
     const writer: Self = .{ .writer = w };
     try writer.writeTagType(TagType.Compound);
@@ -55,7 +78,46 @@ pub fn writeLen(self: Self, len: u31) !void {
     try self.writeInt(len);
 }
 
-//TODO: writeNbt fn, tagtype fn
+/// Recursively encodes `val` into NBT format.
+///
+/// This is the core serialization routine used by `write`.
+/// It inspects `@typeInfo(@TypeOf(val))` and emits the corresponding
+/// binary representation.
+///
+/// Supported mappings:
+/// - `bool`              → `.Byte` (0 or 1)
+/// - integers            → `.Byte`, `.Short`, `.Int`, `.Long` (size-based)
+/// - `f32` / `f64`       → `.Float` / `.Double`
+/// - `[]const u8`        → `.String`
+/// - slices/arrays/vectors:
+///     * `u8/i8`  → `.ByteArray`
+///     * `i32/u32`→ `.IntArray`
+///     * `i64/u64`→ `.LongArray`
+///     * otherwise→ `.List`
+/// - structs             → `.Compound`
+///     * Fields equal to their default values are omitted.
+///     * Optional fields are omitted when `null`.
+///     * A field named `"trailing\n"` is treated as a dynamic
+///       string-keyed map and written last.
+/// - enums               → encoded as their underlying integer type
+///
+/// Customization:
+/// - If the type defines `writeNbt(Self)`, that method is used.
+/// - String-keyed hash maps detected via `meta_util.stringHashMapType`
+///   are serialized as compounds with dynamic keys.
+///
+/// Structural behavior:
+/// - Compounds end with a `.End` tag.
+/// - Lists write their element tag type and length before elements.
+/// - Empty lists write `.End` as their element tag.
+///
+/// Errors:
+/// - Propagates writer errors.
+/// - Returns `error.CastError` if numeric narrowing fails.
+/// - Produces compile errors for unsupported types.
+///
+/// This function is not intended to be called directly unless
+/// implementing custom NBT writing behavior.
 pub fn innerWrite(w: Self, val: anytype) Error!void {
     const T = @TypeOf(val);
     switch (@typeInfo(T)) {

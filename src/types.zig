@@ -15,7 +15,7 @@ pub fn BoundedArray(T: type, bound: comptime_int) type {
 
         pub const defaultNbtType = nbt.TagType.fromType(@FieldType(@This(), "arr")).?;
 
-        pub fn readNbt(alloc: ?std.mem.Allocator, r: nbt.NbtReader, tag: nbt.TagType) !@This() {
+        pub fn readNbt(alloc: ?std.mem.Allocator, r: nbt.Reader, tag: nbt.TagType) !@This() {
             if (try r.takeChildTag(tag)) |child| {
                 var res: @This() = .{};
                 const len = try r.takeLen();
@@ -26,7 +26,7 @@ pub fn BoundedArray(T: type, bound: comptime_int) type {
             } else return error.WrongTag;
         }
 
-        pub fn writeNbt(self: @This(), w: nbt.NbtWriter) !void {
+        pub fn writeNbt(self: @This(), w: nbt.Writer) !void {
             try nbt.writeNbtType(w, self.items());
         }
 
@@ -54,14 +54,14 @@ pub const Value = union(enum) {
 
     pub const defaultNbtType = .End;
 
-    pub fn readNbt(alloc: ?std.mem.Allocator, r: nbt.NbtReader, tag: nbt.TagType) !@This() {
+    pub fn readNbt(alloc: ?std.mem.Allocator, r: nbt.Reader, tag: nbt.TagType) !@This() {
         return switch (tag) {
             .End => error.WrongTag,
             inline else => |t| @unionInit(@This(), @tagName(t), try r.innerParse(@FieldType(@This(), @tagName(t)), t, alloc)),
         };
     }
 
-    pub fn writeNbt(self: @This(), w: nbt.NbtWriter) !void {
+    pub fn writeNbt(self: @This(), w: nbt.Writer) !void {
         switch (std.meta.activeTag(self)) {
             inline else => |t| try w.innerWrite(@field(self, @tagName(t))),
         }

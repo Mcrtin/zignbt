@@ -13,12 +13,12 @@ const Heightmap = enum {
 const Chunk = struct {
     Status: []const u8,
     zPos: i32,
-    block_entities: []struct { id: []const u8, keepPacked: bool = false, x: i32, y: i32, z: i32, components: std.StringArrayHashMapUnmanaged(nbt.NbtValue) = .empty, @"trailing\n": std.StringArrayHashMapUnmanaged(nbt.NbtValue) },
+    block_entities: []struct { id: []const u8, keepPacked: bool = false, x: i32, y: i32, z: i32, components: std.StringArrayHashMapUnmanaged(nbt.Value) = .empty, @"trailing\n": std.StringArrayHashMapUnmanaged(nbt.Value) },
     yPos: i32,
     LastUpdate: i64,
     structures: struct {
         References: std.StringArrayHashMapUnmanaged([]i64),
-        starts: std.StringArrayHashMapUnmanaged(nbt.NbtValue),
+        starts: std.StringArrayHashMapUnmanaged(nbt.Value),
     },
     InhabitedTime: i64,
     xPos: i32,
@@ -26,20 +26,20 @@ const Chunk = struct {
     sections: []struct {
         block_states: struct {
             data: []i64 = &.{},
-            palette: []struct { Name: []const u8, Properties: std.StringArrayHashMapUnmanaged(nbt.NbtValue) = .empty },
+            palette: []struct { Name: []const u8, Properties: std.StringArrayHashMapUnmanaged(nbt.Value) = .empty },
         },
         biomes: struct { palette: [][]const u8, data: []i64 = &.{} },
         BlockLight: ?[2048]i8 = null,
         SkyLight: ?[2048]i8 = null,
         Y: i8,
     },
-    entities: []std.StringArrayHashMapUnmanaged(nbt.NbtValue) = &.{},
+    entities: []std.StringArrayHashMapUnmanaged(nbt.Value) = &.{},
     isLightOn: ?bool = null,
-    block_ticks: []std.StringArrayHashMapUnmanaged(nbt.NbtValue),
+    block_ticks: []std.StringArrayHashMapUnmanaged(nbt.Value),
     carving_mask: []i64 = &.{},
     PostProcessing: [][]i16,
     DataVersion: i32,
-    fluid_ticks: []std.StringArrayHashMapUnmanaged(nbt.NbtValue),
+    fluid_ticks: []std.StringArrayHashMapUnmanaged(nbt.Value),
 };
 
 const SECTOR_BYTES = 4096;
@@ -54,6 +54,7 @@ const Compression = enum(u8) {
 
 pub fn loadChunk(
     r: *std.fs.File.Reader,
+    gpa: std.mem.Allocator,
     chunk_x: u5,
     chunk_z: u5,
 ) !void {
@@ -78,75 +79,42 @@ pub fn loadChunk(
     switch (compression_type) {
         .gzip => {
             var decomp = std.compress.flate.Decompress.init(&reader.interface, .gzip, &compress_buf);
-            try printtype(&decomp.reader);
+            try printType(&decomp.reader, gpa);
         },
         .zlib => {
             var decomp = std.compress.flate.Decompress.init(&reader.interface, .zlib, &compress_buf);
-            try printtype(&decomp.reader);
+            if (chunk_x == 12 and chunk_z == 16) {
+                const v = try nbt.readLeaky(&decomp.reader, nbt.Value, true, gpa);
+                var errbuf: [200]u8 = undefined;
+                try v.printShape(std.debug.lockStderrWriter(&errbuf));
+                std.debug.unlockStdErr();
+            } else try printType(&decomp.reader, gpa);
         },
-        .none => try printtype(&reader.interface),
+        .none => try printType(&reader.interface, gpa),
         else => return error.Unsupported,
     }
 }
-fn printtype(r: *std.Io.Reader) !void {
-    var a = std.heap.DebugAllocator(.{}){};
-    // defer _ = a.detectLeaks();
-    defer _ = a.deinit();
-    const gpa = a.allocator();
+
+fn printType(r: *std.Io.Reader, gpa: std.mem.Allocator) !void {
     var arena = std.heap.ArenaAllocator.init(gpa);
 
     defer arena.deinit();
     const alloc = arena.allocator();
     const chunk = try nbt.readLeaky(r, Chunk, true, alloc);
-    // const v = try zignbt.read(r, zignbt.NbtValue, true, alloc);
-    // var buf: [200]u8 = undefined;
-    // var f = std.fs.File.stdout();
-    var w = std.Io.Writer.Allocating.init(gpa);
-    defer w.deinit();
-    // try v.printShape(&w.interface);
-    // try w.interface.writeAll("\n");
-    try nbt.write(&w.writer, &chunk, true);
-    try w.writer.flush();
-    var r2 = std.Io.Reader.fixed(w.written());
-    const chunk2 = try nbt.readLeaky(&r2, Chunk, true, alloc);
-
-    if (!std.meta.eql(chunk, chunk2)) std.debug.print("{any}\n", .{chunk2});
+    try nbt.testVal(chunk, gpa);
 }
+
 pub fn main() !void {
+    var a = std.heap.DebugAllocator(.{}){};
+    defer _ = a.deinit();
+    const gpa = a.allocator();
     var args = std.process.args();
     _ = args.skip();
     const f = try std.fs.cwd().openFile(args.next().?, .{});
     var rbuf: [1024]u8 = undefined;
     var r = f.reader(&rbuf);
-    for (0..1) |x| for (0..1) |z| {
+    for (0..31) |x| for (0..31) |z| {
         std.debug.print("x: {d} z: {d}\n", .{ x, z });
-        try loadChunk(&r, @intCast(x), @intCast(z));
+        try loadChunk(&r, gpa, @intCast(x), @intCast(z));
     };
-    // const v = try zignbt.read(&r.interface, zignbt.NbtValue, false);
-    // var buf: [200]u8 = undefined;
-    // var w = std.fs.File.stdout().writer(&buf);
-    // try v.printShape(&w.interface);
-    // try zignbt.write(undefined, {}, false);
-    // Prints to stderr, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-    // try zignbt.bufferedPrint();
-}
-
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
-
-test "fuzz example" {
-    const Context = struct {
-        fn testOne(context: @This(), input: []const u8) anyerror!void {
-            _ = context;
-            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
-        }
-    };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
 }

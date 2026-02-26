@@ -3,6 +3,31 @@ const TagType = @import("tag.zig").TagType;
 const meta_util = @import("util.zig");
 pub const Error = std.mem.Allocator.Error || std.Io.Reader.TakeEnumError || error{ CastError, WrongTag, MissingField, WrongFormat, SizeError, DuplicateField };
 
+/// Parses an NBT payload from `r` into a value of type `T`.
+///
+/// This function expects the stream to begin with a `.Compound` tag.
+/// If `read_name` is `true`, the root compound must have an empty name,
+/// otherwise `error.WrongFormat` is returned.
+///
+/// Memory behavior:
+/// - Any dynamically allocated memory (strings, slices, maps, etc.)
+///   is allocated using `alloc`.
+/// - The function is "leaky" in the sense that it does not perform any
+///   cleanup on partial failure — the caller is responsible for freeing
+///   all successfully allocated memory reachable from the returned value.
+///
+/// Type requirements:
+/// - `T` must be representable from an NBT `.Compound`.
+/// - Structs are decoded from compound tags.
+/// - Slices, maps, and nested containers require a non-null allocator.
+///
+/// Errors:
+/// - Returns `error.WrongTag`, `error.WrongFormat`, `error.MissingField`,
+///   `error.DuplicateField`, `error.SizeError`, `error.CastError`,
+///   allocator errors, or reader errors.
+/// - Propagates any I/O failures from `r`.
+///
+/// This is the main entry point for decoding strongly-typed values from NBT.
 pub fn readLeaky(r: *std.Io.Reader, T: type, read_name: bool, alloc: std.mem.Allocator) !T {
     const reader: Self = .{ .reader = r };
     try (try reader.takeTagType()).expect(.Compound);
@@ -55,20 +80,48 @@ pub fn takeLen(self: Self) !u31 {
     return meta_util.castInt(try self.takeInt(), u31);
 }
 
-fn stringHashMapType(T: type) ?type {
-    switch (@typeInfo(T)) {
-        .@"struct" => {},
-        else => return null,
-    }
-    if (std.meta.hasMethod(T, "put") and @hasDecl(T, "empty") and @TypeOf(T.empty) == T) {
-        const ty = @typeInfo(@TypeOf(T.put));
-        const params = ty.@"fn".params;
-        if (params.len == 4 and params[1].type.? == std.mem.Allocator and params[2].type.? == []const u8)
-            return params[3].type.?;
-    }
-    return null;
-}
-
+/// Recursively parses a value of type `T` from the NBT stream,
+/// assuming the current tag type is `tag`.
+///
+/// This is the core decoding routine used by `readLeaky`.
+/// It dispatches on `@typeInfo(T)` and enforces that the provided
+/// NBT `tag` matches the expected representation.
+///
+/// Supported mappings:
+/// - `bool`              ← `.Byte` (0 or 1)
+/// - integers            ← `.Byte`, `.Short`, `.Int`, `.Long` (size-based)
+/// - `f32` / `f64`       ← `.Float` / `.Double`
+/// - `[]const u8`        ← `.String` (copied using `alloc`)
+/// - slices              ← `.List`, `.ByteArray`, `.IntArray`, `.LongArray`
+/// - fixed arrays        ← list-like tags with exact length match
+/// - structs             ← `.Compound`
+///     * Fields are matched by name.
+///     * Duplicate fields cause `error.DuplicateField`.
+///     * Missing required fields cause `error.MissingField`.
+///     * Default field values are filled via `std.json.fillDefaultStructValues`.
+///     * A field named `"trailing\n"` may capture unknown keys into a
+///       string-keyed hashmap.
+/// - enums               ← underlying integer tag type
+/// - optionals           ← parsed as their child type (no explicit null tag)
+///
+/// Special cases:
+/// - If `T` defines `pub fn readNbt(...)`, that function is used instead.
+/// - If `T` matches a `std.StringHashMapUnmanaged(V)`-like type (also supports `std.StringArrayHashMapUnmanaged(V)`), it is decoded from a compound
+///   with string keys and values of type `V`.
+///
+/// Allocation:
+/// - Dynamic containers require `alloc` to be non-null.
+/// - The allocator is forwarded recursively.
+///
+/// Errors:
+/// - `error.WrongTag` if the NBT tag does not match the expected shape.
+/// - `error.SizeError` for fixed-size container mismatches.
+/// - `error.CastError` for invalid numeric or boolean conversions.
+/// - `error.MissingField` / `error.DuplicateField` for struct decoding.
+/// - Any allocator or reader errors are propagated.
+///
+/// This function is not intended to be called directly unless
+/// implementing custom decoding behavior.
 pub fn innerParse(self: Self, T: type, tag: TagType, alloc: ?std.mem.Allocator) Error!T {
     switch (@typeInfo(T)) {
         .void => return {},
@@ -129,7 +182,7 @@ pub fn innerParse(self: Self, T: type, tag: TagType, alloc: ?std.mem.Allocator) 
             if (std.meta.hasFn(T, "readNbt")) {
                 return T.readNbt(alloc, self, tag);
             }
-            if (stringHashMapType(T)) |inner| {
+            if (meta_util.stringHashMapType(T)) |inner| {
                 var res: T = .empty;
                 try tag.expect(.Compound);
                 var curr = try self.takeTagType();
@@ -154,7 +207,7 @@ pub fn innerParse(self: Self, T: type, tag: TagType, alloc: ?std.mem.Allocator) 
                 var curr = try self.takeTagType();
                 const inner: ?type = blk: inline for (s.fields, 0..) |field, i| {
                     if (comptime std.mem.eql(u8, field.name, "trailing\n")) {
-                        if (stringHashMapType(field.type)) |inn| {
+                        if (meta_util.stringHashMapType(field.type)) |inn| {
                             res.@"trailing\n" = .empty;
                             fields_seen[i] = true;
                             break :blk inn;

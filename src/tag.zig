@@ -14,6 +14,13 @@ pub const TagType = enum(u8) {
     IntArray = 11,
     LongArray = 12,
 
+    /// Ensures that `self` matches the `expected` tag type.
+    ///
+    /// Returns `error.WrongTag` if the tag differs.
+    /// In debug builds, prints the received tag before returning the error.
+    ///
+    /// This is primarily used during decoding to validate that the
+    /// incoming NBT tag matches the expected Zig type.
     pub fn expect(self: @This(), expected: TagType) !void {
         if (self != expected) {
             std.debug.print("got: {any}\n", .{self});
@@ -21,6 +28,25 @@ pub const TagType = enum(u8) {
         }
     }
 
+    /// Infers the NBT tag type corresponding to a runtime value `val`.
+    ///
+    /// Behavior:
+    /// - If the value's type defines `nbtType()`, that method is used.
+    /// - `[]const u8` → `.String`
+    /// - Pointers to single values delegate to their child.
+    /// - Slices/arrays/vectors:
+    ///     * If empty, fall back to `fromType(T)`
+    ///     * If non-empty:
+    ///         - `.Byte` elements → `.ByteArray`
+    ///         - `.Int` elements  → `.IntArray`
+    ///         - `.Long` elements → `.LongArray`
+    ///         - otherwise        → `.List`
+    /// - Scalars and structs delegate to `fromType`.
+    ///
+    /// Returns `null` for `void` values.
+    ///
+    /// This function is intended for NBT serialization, allowing
+    /// automatic tag deduction from Zig values.
     pub fn fromVal(val: anytype) ?@This() {
         const T = @TypeOf(val);
         if (std.meta.hasMethod(T, "nbtType")) {
@@ -55,6 +81,37 @@ pub const TagType = enum(u8) {
         }
     }
 
+    /// Infers the NBT tag type corresponding to a Zig type `T`.
+    ///
+    /// Mapping rules:
+    /// - `[]const u8` → `.String`
+    /// - Slices/arrays/vectors:
+    ///     * `u8/i8`  → `.ByteArray`
+    ///     * `i32/u32`→ `.IntArray`
+    ///     * `i64/u64`→ `.LongArray`
+    ///     * otherwise→ `.List`
+    /// - `bool` → `.Byte`
+    /// - Integers:
+    ///     * ≤8 bits   → `.Byte`
+    ///     * ≤16 bits  → `.Short`
+    ///     * ≤32 bits  → `.Int`
+    ///     * ≤64 bits  → `.Long`
+    /// - `f32` → `.Float`
+    /// - `f64` → `.Double`
+    /// - `struct` → `.Compound` unless it defines `defaultNbtType`
+    /// - `enum` → underlying tag type unless it defines `defaultNbtType`
+    ///
+    /// Specialization:
+    /// - If `T` declares a `pub const defaultNbtType`, that value
+    ///   overrides the inferred mapping.
+    ///
+    /// Compile-time errors:
+    /// - Optionals are unsupported.
+    /// - Unions without `defaultNbtType` are unsupported.
+    /// - Unsupported or ambiguous types produce a compile error.
+    ///
+    /// This function is primarily used during serialization to determine
+    /// which NBT tag header should be written for a given Zig type.
     pub fn fromType(T: type) ?@This() {
         switch (@typeInfo(T)) {
             .pointer => |pointer| {
