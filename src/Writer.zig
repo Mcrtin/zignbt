@@ -66,7 +66,7 @@ pub fn writeFloat(self: Self, val: f32) !void {
     try self.writeInt(@bitCast(val));
 }
 pub fn writeDouble(self: Self, val: f64) !void {
-    try self.writeDouble(@bitCast(val));
+    try self.writeLong(@bitCast(val));
 }
 
 pub fn writeString(self: Self, val: []const u8) !void {
@@ -109,7 +109,7 @@ pub fn writeLen(self: Self, len: u31) !void {
 /// Structural behavior:
 /// - Compounds end with a `.End` tag.
 /// - Lists write their element tag type and length before elements.
-/// - Empty lists write `.End` as their element tag.
+/// - Empty lists may write `.End` as their element tag.
 ///
 /// Errors:
 /// - Propagates writer errors.
@@ -122,9 +122,7 @@ pub fn innerWrite(w: Self, val: anytype) Error!void {
     const T = @TypeOf(val);
     switch (@typeInfo(T)) {
         .void => return {},
-        .bool => {
-            try w.writeByte(if (val) 1 else 0);
-        },
+        .bool => try w.writeByte(if (val) 1 else 0),
         .int => |int| {
             if (int.bits <= 8)
                 try w.writeByte(try meta_util.castInt(val, i8))
@@ -152,10 +150,8 @@ pub fn innerWrite(w: Self, val: anytype) Error!void {
             switch (pointer.size) {
                 .slice => {
                     if (T == []const u8) try w.writeString(val) else {
-                        if (val.len == 0)
-                            try w.writeTagType(.End)
-                        else if (TagType.fromVal(val).? == .List)
-                            try w.writeTagType(TagType.fromVal(val[0]).?);
+                        if (TagType.fromVal(val).? == .List)
+                            try w.writeTagType(if (val.len == 0) TagType.fromType(pointer.child).? else TagType.fromVal(val[0]).?);
                         try w.writeLen(@intCast(val.len));
                         for (val) |v| try innerWrite(w, v);
                     }
@@ -164,12 +160,10 @@ pub fn innerWrite(w: Self, val: anytype) Error!void {
                 else => @compileError("pointers are not supported"),
             }
         },
-        inline .array, .vector => |_| {
+        inline .array, .vector => |arr| {
+            if (TagType.fromVal(val).? == .List)
+                try w.writeTagType(if (val.len == 0) TagType.fromType(arr.child).? else TagType.fromVal(val[0]).?);
             try w.writeLen(@intCast(val.len));
-            if (val.len == 0)
-                try w.writeTagType(.End)
-            else if (TagType.fromVal(val).? == .List)
-                try w.writeTagType(TagType.fromVal(val[0]).?);
             for (val) |v| try innerWrite(w, v);
         },
         .@"struct" => |s| {
@@ -187,7 +181,7 @@ pub fn innerWrite(w: Self, val: anytype) Error!void {
             if (meta_util.stringHashMapType(T)) |_| {
                 var it = val.iterator();
                 while (it.next()) |item| {
-                    try w.writeTagType(TagType.fromVal(item.value_ptr).?);
+                    try w.writeTagType(TagType.fromVal(item.value_ptr.*).?);
                     try w.writeString(item.key_ptr.*);
                     try innerWrite(w, item.value_ptr.*);
                 }

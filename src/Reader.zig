@@ -173,7 +173,7 @@ pub fn innerParse(self: Self, T: type, tag: TagType, alloc: ?std.mem.Allocator) 
                 if (try self.takeLen() != arr.len) return error.SizeError;
                 var res: [arr.len]arr.child = undefined;
                 for (&res) |*re|
-                    re.* = try innerParse(self, arr.child, child, alloc);
+                    re.* = try self.innerParse(arr.child, child, alloc);
                 return res;
             } else return error.WrongTag;
         },

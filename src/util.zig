@@ -26,10 +26,12 @@ pub fn stringHashMapType(T: type) ?type {
 pub fn fillDefaultStructValues(comptime T: type, r: *T, fields_seen: *[@typeInfo(T).@"struct".fields.len]bool) !void {
     inline for (@typeInfo(T).@"struct".fields, 0..) |field, i| {
         if (!fields_seen[i]) {
-            if (field.defaultValue()) |default| {
-                @field(r, field.name) = default;
-            } else {
-                std.debug.print(" {s} missing field {s}\n", .{ @typeName(T), field.name });
+            if (field.defaultValue()) |default|
+                @field(r, field.name) = default
+            else if (@typeInfo(field.type) == .optional)
+                @field(r, field.name) = null
+            else {
+                std.debug.print("{s} missing field {s}\n", .{ @typeName(T), field.name });
                 return error.MissingField;
             }
         }

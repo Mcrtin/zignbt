@@ -58,6 +58,7 @@ pub const TagType = enum(u8) {
                     return .String;
                 }
                 if (p.size == .one) return fromVal(val.*);
+                std.debug.assert(p.size == .slice);
                 if (val.len == 0) return fromType(T);
                 return switch (fromVal(val[0]).?) {
                     .End => unreachable,

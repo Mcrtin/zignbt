@@ -22,24 +22,24 @@ const Chunk = struct {
     },
     InhabitedTime: i64,
     xPos: i32,
-    Heightmaps: std.enums.EnumFieldStruct(Heightmap, []i64, &.{}),
+    Heightmaps: std.enums.EnumFieldStruct(Heightmap, ?[]i64, null),
     sections: []struct {
         block_states: struct {
-            data: []i64 = &.{},
+            data: ?[]i64,
             palette: []struct { Name: []const u8, Properties: std.StringArrayHashMapUnmanaged(nbt.Value) = .empty },
         },
-        biomes: struct { palette: [][]const u8, data: []i64 = &.{} },
-        BlockLight: ?[2048]i8 = null,
-        SkyLight: ?[2048]i8 = null,
+        biomes: struct { palette: [][]const u8, data: ?[]i64 },
+        BlockLight: ?[2048]i8,
+        SkyLight: ?[2048]i8,
         Y: i8,
     },
-    entities: []std.StringArrayHashMapUnmanaged(nbt.Value) = &.{},
-    isLightOn: ?bool = null,
+    entities: ?[]std.StringArrayHashMapUnmanaged(nbt.Value),
+    isLightOn: ?bool,
     block_ticks: []std.StringArrayHashMapUnmanaged(nbt.Value),
-    carving_mask: []i64 = &.{},
-    PostProcessing: [][]i16,
-    DataVersion: i32,
-    fluid_ticks: []std.StringArrayHashMapUnmanaged(nbt.Value),
+    carving_mask: ?[]i64,
+    PostProcessing: [24][]i16 = @splat(&.{}),
+    DataVersion: ?i32,
+    fluid_ticks: ?[]std.StringArrayHashMapUnmanaged(nbt.Value),
 };
 
 const SECTOR_BYTES = 4096;
@@ -83,16 +83,25 @@ pub fn loadChunk(
         },
         .zlib => {
             var decomp = std.compress.flate.Decompress.init(&reader.interface, .zlib, &compress_buf);
-            if (chunk_x == 12 and chunk_z == 16) {
-                const v = try nbt.readLeaky(&decomp.reader, nbt.Value, true, gpa);
-                var errbuf: [200]u8 = undefined;
-                try v.printShape(std.debug.lockStderrWriter(&errbuf));
-                std.debug.unlockStdErr();
-            } else try printType(&decomp.reader, gpa);
+            // if (chunk_x == 12 and chunk_z == 16) {
+            //     var arena = std.heap.ArenaAllocator.init(gpa);
+            //
+            //     defer arena.deinit();
+            //     const alloc = arena.allocator();
+            //     const v = try nbt.readLeaky(&decomp.reader, nbt.Value, true, alloc);
+            //     var errbuf: [256]u8 = undefined;
+            //     const errw = std.debug.lockStderrWriter(&errbuf);
+            //     try v.printShape(errw);
+            //     try errw.flush();
+            //
+            //     std.debug.unlockStdErr();
+            // } else
+            try printType(&decomp.reader, gpa);
         },
         .none => try printType(&reader.interface, gpa),
         else => return error.Unsupported,
     }
+    std.debug.assert(reader.remaining == .nothing);
 }
 
 fn printType(r: *std.Io.Reader, gpa: std.mem.Allocator) !void {
