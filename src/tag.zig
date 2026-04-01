@@ -156,10 +156,11 @@ pub const TagType = enum(u8) {
             },
             .@"struct" => |s| inline for (s.decls) |decl| {
                 if (comptime std.mem.eql(u8, decl.name, "defaultNbtType")) return T.defaultNbtType;
-            } else return .Compound,
+            } else if (s.backing_integer) |int| return TagType.fromType(int).? else return .Compound,
             .optional => @compileError("optionals are not supported in this context"),
             .@"enum" => |e| inline for (e.decls) |decl| {
                 if (comptime std.mem.eql(u8, decl.name, "defaultNbtType")) return T.defaultNbtType;
+                if (comptime std.mem.eql(u8, decl.name, "is_string")) return .String;
             } else return fromType(e.tag_type),
             .@"union" => |u| {
                 inline for (u.decls) |decl| {

@@ -153,10 +153,10 @@ pub fn innerWrite(w: Self, val: anytype) Error!void {
                         if (TagType.fromVal(val).? == .List)
                             try w.writeTagType(if (val.len == 0) TagType.fromType(pointer.child).? else TagType.fromVal(val[0]).?);
                         try w.writeLen(@intCast(val.len));
-                        for (val) |v| try innerWrite(w, v);
+                        for (val) |v| try w.innerWrite(v);
                     }
                 },
-                .one => try innerWrite(w, val.*),
+                .one => try w.innerWrite(val.*),
                 else => @compileError("pointers are not supported"),
             }
         },
@@ -164,7 +164,7 @@ pub fn innerWrite(w: Self, val: anytype) Error!void {
             if (TagType.fromVal(val).? == .List)
                 try w.writeTagType(if (val.len == 0) TagType.fromType(arr.child).? else TagType.fromVal(val[0]).?);
             try w.writeLen(@intCast(val.len));
-            for (val) |v| try innerWrite(w, v);
+            for (val) |v| try w.innerWrite(v);
         },
         .@"struct" => |s| {
             if (std.meta.hasMethod(T, "writeNbt")) {
@@ -175,7 +175,7 @@ pub fn innerWrite(w: Self, val: anytype) Error!void {
             }
             if (s.is_tuple) @compileError("tuple structs are not supported");
             if (s.backing_integer) |int| {
-                try innerWrite(@as(int, @bitCast(val)));
+                try w.innerWrite(@as(int, @bitCast(val)));
                 return;
             }
             if (meta_util.stringHashMapType(T)) |_| {
@@ -183,7 +183,7 @@ pub fn innerWrite(w: Self, val: anytype) Error!void {
                 while (it.next()) |item| {
                     try w.writeTagType(TagType.fromVal(item.value_ptr.*).?);
                     try w.writeString(item.key_ptr.*);
-                    try innerWrite(w, item.value_ptr.*);
+                    try w.innerWrite(item.value_ptr.*);
                 }
                 try w.writeTagType(.End);
                 return;
@@ -202,19 +202,25 @@ pub fn innerWrite(w: Self, val: anytype) Error!void {
                     if (comptime !std.mem.eql(u8, field.name, "trailing\n")) {
                         try w.writeTagType(TagType.fromVal(v).?);
                         try w.writeString(field.name);
-                        try innerWrite(w, v);
+                        try w.innerWrite(v);
                     }
                 }
             }
 
             inline for (s.fields) |field| if (comptime std.mem.eql(u8, field.name, "trailing\n"))
-                return try innerWrite(w, val.@"trailing\n");
+                return try w.innerWrite(val.@"trailing\n");
             try w.writeTagType(.End);
         },
         .optional => @compileError("optional not supported here"),
         .@"enum" => |e| {
+            if (std.meta.hasMethod(T, "writeNbt"))
+                return try val.writeNbt(w);
+
+            if (@hasDecl(T, "is_string") and @TypeOf(T.is_string) == void)
+                return try w.writeString(@tagName(val));
+
             const v: e.tag_type = @intFromEnum(val);
-            try innerWrite(w, v);
+            try w.innerWrite(v);
         },
         .@"union" => {
             if (std.meta.hasMethod(T, "writeNbt")) {

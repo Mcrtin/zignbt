@@ -1,7 +1,95 @@
-const std = @import("std");
 const nbt = @import("root.zig");
+const std = @import("std");
 
-pub fn BoundedArray(T: type, bound: comptime_int) type {
+pub fn FlatUnion(U: type) type {
+    return struct {
+        inner: U,
+        pub const NbtType = blk: {
+            var fields_len = 1;
+            for (@typeInfo(U).@"union".fields) |field| fields_len += @typeInfo(field.type).@"struct".fields.len;
+
+            @setEvalBranchQuota(fields_len * 100);
+
+            var buf: [fields_len]std.builtin.Type.StructField = undefined;
+            var list: std.ArrayList(std.builtin.Type.StructField) = .initBuffer(&buf);
+
+            const tag_type = @typeInfo(U).@"union".tag_type.?;
+            const tag_type_name = @typeName(tag_type);
+            const tag_name = tag_type_name[std.mem.lastIndexOfScalar(u8, tag_type_name, '.').? + 1 ..];
+            list.appendAssumeCapacity(.{
+                .type = tag_type,
+                .name = tag_name,
+                .is_comptime = false,
+                .alignment = @alignOf(tag_type),
+                .default_value_ptr = null,
+            });
+
+            for (@typeInfo(U).@"union".fields) |field| {
+                for (@typeInfo(field.type).@"struct".fields) |inner_field| {
+                    for (list.items) |item| {
+                        if (std.mem.eql(u8, item.name, inner_field.name)) {
+                            if (@typeInfo(item.type).optional.child != inner_field.type) @compileError("mismatched types in FlatUnion " ++ @typeName(U) ++ " at field " ++ inner_field.name);
+                            break;
+                        }
+                    } else list.appendAssumeCapacity(.{
+                        .type = @Type(.{ .optional = .{ .child = inner_field.type } }),
+                        .name = inner_field.name,
+                        .is_comptime = inner_field.is_comptime,
+                        .alignment = inner_field.alignment,
+                        .default_value_ptr = null,
+                    });
+                }
+            }
+            break :blk @Type(.{ .@"struct" = .{
+                .fields = list.items,
+                .decls = &.{},
+                .is_tuple = false,
+                .layout = .auto,
+            } });
+        };
+
+        pub const defaultNbtType = nbt.TagType.Compound;
+
+        pub fn readNbt(alloc: ?std.mem.Allocator, r: nbt.Reader, tag: nbt.TagType) !@This() {
+            const nbt_res = try r.innerParse(NbtType, tag, alloc);
+            const tag_type = @typeInfo(U).@"union".tag_type.?;
+            const tag_type_name = @typeName(tag_type);
+            const tag_name = comptime tag_type_name[std.mem.lastIndexOfScalar(u8, tag_type_name, '.').? + 1 ..];
+            switch (@field(nbt_res, tag_name)) {
+                inline else => |a| {
+                    const active = @tagName(a);
+                    var init: @FieldType(U, active) = undefined;
+                    inline for (@typeInfo(@TypeOf(init)).@"struct".fields) |field| {
+                        const instance = @field(nbt_res, field.name);
+                        if (@typeInfo(field.type) != .optional and instance == null) return error.CastError;
+                        @field(init, field.name) = instance orelse if (@typeInfo(field.type) != .optional) field.defaultValue().? else field.defaultValue() orelse null;
+                    }
+                    //TODO: verify that no other field was read!
+                    return .{ .inner = @unionInit(U, active, init) };
+                },
+            }
+        }
+
+        pub fn writeNbt(self: @This(), w: nbt.Writer) !void {
+            const tag = std.meta.activeTag(self.inner);
+            try w.writeTagType(nbt.TagType.fromVal(tag).?);
+            const tag_type = @typeInfo(U).@"union".tag_type.?;
+            const tag_type_name = @typeName(tag_type);
+            const tag_name = comptime tag_type_name[std.mem.lastIndexOfScalar(u8, tag_type_name, '.').? + 1 ..];
+            try w.writeString(tag_name);
+            try w.innerWrite(tag);
+            switch (tag) {
+                inline else => |a| try w.innerWrite(@field(self.inner, @tagName(a))),
+            }
+        }
+
+        pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
+            if (std.meta.hasMethod(U, "deinit")) self.inner.deinit(alloc);
+        }
+    };
+}
+
+pub fn BoundedArray(T: type, comptime bound: usize) type {
     return struct {
         len: std.math.IntFittingRange(0, bound) = 0,
         arr: [bound]T = undefined,
@@ -10,7 +98,7 @@ pub fn BoundedArray(T: type, bound: comptime_int) type {
             return self.arr[0..self.len];
         }
         pub fn a(self: *@This()) std.ArrayList(T) {
-            return std.ArrayList(T){ .capacity = bound, .items = self.items() };
+            return std.ArrayList(T){ .capacity = self.arr.len, .items = self.items() };
         }
 
         pub const defaultNbtType = nbt.TagType.fromType(@FieldType(@This(), "arr")).?;
@@ -27,7 +115,7 @@ pub fn BoundedArray(T: type, bound: comptime_int) type {
         }
 
         pub fn writeNbt(self: @This(), w: nbt.Writer) !void {
-            try nbt.writeNbtType(w, self.items());
+            w.innerWrite(self.items());
         }
 
         pub fn nbtType(self: @This()) nbt.TagType {

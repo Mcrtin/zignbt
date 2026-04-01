@@ -9,5 +9,6 @@ pub const TagType = @import("tag.zig").TagType;
 const types = @import("types.zig");
 pub const Value = types.Value;
 pub const BoundedArray = types.BoundedArray;
+pub const FlatUnion = types.FlatUnion;
 
 pub const testVal = @import("test.zig").testVal;

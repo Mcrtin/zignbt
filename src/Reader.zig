@@ -164,7 +164,7 @@ pub fn innerParse(self: Self, T: type, tag: TagType, alloc: ?std.mem.Allocator) 
                 // r.reader.readSliceEndianAlloc(alloc.?, pointer.child, r.takeLen(), .big);
                 const res: []pointer.child = try alloc.?.alloc(pointer.child, try self.takeLen());
                 for (res) |*re|
-                    re.* = try innerParse(self, pointer.child, child, alloc);
+                    re.* = try self.innerParse(pointer.child, child, alloc);
                 return res;
             } else return error.WrongTag;
         },
@@ -196,7 +196,7 @@ pub fn innerParse(self: Self, T: type, tag: TagType, alloc: ?std.mem.Allocator) 
                 if (try self.takeChildTag(tag)) |child| {
                     if (try self.takeLen() != s.fields) return error.SizeError;
                     inline for (res.fields, 0..) |item, i| {
-                        res[i] = try innerParse(self, item.type, child, alloc);
+                        res[i] = try self.innerParse(item.type, child, alloc);
                     }
                 } else return error.WrongTag;
             }
@@ -220,10 +220,10 @@ pub fn innerParse(self: Self, T: type, tag: TagType, alloc: ?std.mem.Allocator) 
                         if (std.mem.eql(u8, name, field.name)) {
                             if (fields_seen[i]) return error.DuplicateField;
                             fields_seen[i] = true;
-                            @field(res, field.name) = try innerParse(self, field.type, curr, alloc);
+                            @field(res, field.name) = try self.innerParse(field.type, curr, alloc);
                             break;
                         }
-                    } else if (inner) |inn| try res.@"trailing\n".put(alloc.?, name, try innerParse(self, inn, curr, alloc)) else {
+                    } else if (inner) |inn| try res.@"trailing\n".put(alloc.?, name, try self.innerParse(inn, curr, alloc)) else {
                         std.debug.print("missing field {s}\n", .{name});
                         return error.MissingField;
                     }
@@ -233,15 +233,18 @@ pub fn innerParse(self: Self, T: type, tag: TagType, alloc: ?std.mem.Allocator) 
             }
             return res;
         },
-        .optional => |opt| return try innerParse(self, opt.child, tag, alloc),
+        .optional => |opt| return try self.innerParse(opt.child, tag, alloc),
         .@"enum" => |e| {
             if (std.meta.hasFn(T, "readNbt")) {
                 return T.readNbt(alloc, self, tag);
             }
-            if (e.is_exhaustive)
-                return @enumFromInt(try innerParse(self, e.tag_type, tag))
-            else
+            if (!e.is_exhaustive) {
+                return @enumFromInt(try self.innerParse(e.tag_type, tag, alloc));
+            } else if (@hasDecl(T, "is_string") and T.is_string == {})
+                return std.meta.stringToEnum(T, try self.takeString()) orelse error.CastError
+            else {
                 return std.enums.fromInt(T, try innerParse(self, e.tag_type, tag)) orelse error.InvalidEnumVariant;
+            }
         },
         .@"union" => {
             if (std.meta.hasFn(T, "readNbt")) {
