@@ -134,11 +134,11 @@ const BlockEntity = struct {
 const Section = struct {
     block_states: struct {
         data: ?[]i64,
-        palette: []BlockState,
+        palette: []const BlockState,
     },
-    biomes: struct { palette: [][]const u8, data: ?[]i64 },
-    BlockLight: ?[2048]i8,
-    SkyLight: ?[2048]i8,
+    biomes: ?struct { palette: [][]const u8, data: ?[]i64 } = null,
+    BlockLight: ?[2048]i8 = null,
+    SkyLight: ?[2048]i8 = null,
     Y: i8,
 };
 
@@ -207,7 +207,7 @@ const BlockState = struct {
 };
 
 const Structures = struct {
-    References: std.StringArrayHashMapUnmanaged([]packed struct { x: i32, z: i32 }),
+    references: std.StringArrayHashMapUnmanaged([]packed struct { x: i32, z: i32 }),
     starts: std.StringArrayHashMapUnmanaged(struct {
         Children: ?[]struct {
             BB: [6]i32,
@@ -237,16 +237,16 @@ const InnerChunk = struct {
     yPos: i32,
     zPos: i32,
     LastUpdate: i64,
-    block_entities: []BlockEntity,
+    block_entities: []const BlockEntity,
     structures: Structures,
     InhabitedTime: i64,
-    Heightmaps: std.enums.EnumFieldStruct(Heightmap, ?[]i64, null),
-    sections: []Section,
-    block_ticks: []TileTick,
+    Heightmaps: std.enums.EnumFieldStruct(Heightmap, ?[]const i64, null),
+    sections: []const Section,
+    block_ticks: []const TileTick,
     isLightOn: bool,
-    PostProcessing: [24][]i16 = @splat(&.{}),
+    PostProcessing: [24][]const i16 = @splat(&.{}),
     DataVersion: i32,
-    fluid_ticks: []TileTick,
+    fluid_ticks: []const TileTick,
 };
 const Chunk = struct {
     @"trailing\n": StatusChunk,
@@ -268,7 +268,7 @@ const StatusChunk = nbt.FlatUnion(union(Status) {
     @"minecraft:full": InnerChunk,
 });
 
-const SECTOR_BYTES = 4096;
+const SECTOR_BYTES = 4 << 10;
 
 const Compression = enum(u8) {
     gzip = 1,
@@ -277,7 +277,7 @@ const Compression = enum(u8) {
     lz4 = 4,
     custom = 127,
 };
-const ChunkAlias = InnerChunk;
+const ChunkAlias = nbt.Value;
 const ChunkLoadResult = struct { offset: u24, len: u8, chunk: ChunkAlias };
 
 pub fn loadChunk(
@@ -339,12 +339,76 @@ pub fn main() !void {
     const chunk = (try loadChunk(&r, alloc, 0, 0)).?;
     std.debug.print("offset: {d} loc: {d}\n", .{ chunk.offset, chunk.len });
     // try saveChunkToRegion(gpa, &f2, 0, 0, chunk.chunk);
-    try writeChunk(&w, 0, 0, chunk.chunk);
-    var stdout = std.fs.File.stdout();
-    var outb: [1024]u8 = undefined;
-    var outw = stdout.writer(&outb);
-    defer outw.interface.flush() catch {};
-    try nbt.write(&outw.interface, chunk.chunk, true);
+    // var res: nbt.Value = .{ .Compound = try .init(
+    //     gpa,
+    //     &.{"Status"},
+    // ) };
+
+    const comp = chunk.chunk.Compound;
+    std.debug.print("idk: {any}\n", .{comp.get("sections").?.List[0].Compound.keys()});
+    try writeChunk(&w, 0, 0, @as(InnerChunk, .{
+        .Status = .@"minecraft:full",
+        .zPos = @as(i32, 0),
+        .block_entities = &.{},
+        .yPos = @as(i32, -64),
+        .LastUpdate = @as(i64, 0),
+        .structures = .{ .references = .empty, .starts = .empty },
+        .InhabitedTime = @as(i64, 0),
+        .xPos = @as(i32, 0),
+        .Heightmaps = .{
+            .MOTION_BLOCKING = null,
+            .MOTION_BLOCKING_NO_LEAVES = null,
+            .OCEAN_FLOOR = null,
+            .OCEAN_FLOOR_WG = null,
+            .WORLD_SURFACE = null,
+            .WORLD_SURFACE_WG = null,
+        },
+        .sections = &.{.{
+            .block_states = .{
+                .data = null,
+                .palette = @as([]const BlockState, &.{
+                    .{
+                        .Name = "minecraft:stone",
+                        .Properties = .empty,
+                    },
+                }),
+            },
+            .biomes = null,
+            // .BlockLight = comp.get("sections").?.List[0].Compound.get("BlockLight").?,
+            // .SkyLight = comp.get("sections").?.List[0].Compound.get("SkyLight").?,
+            .Y = 4,
+            // SkyLight: ?[2048]i8,
+            // .Y = @as(i8, 4),
+            //
+        }},
+        .block_ticks = &.{},
+        .DataVersion = @as(i64, 4440),
+        .fluid_ticks = &.{},
+        .isLightOn = false,
+    }));
+    // .{
+    //     .Status = "minecraft:full",
+    //     .xPos = @as(i32, 0),
+    //     .yPos = @as(i32, -64),
+    //     .zPos = @as(i32, 0),
+    //     .block_entities = &.{},
+    //     .LastUpdate = @as(i64, 0),
+    //     .structures = .{ .References = .{}, .Starts = .{} },
+    //     .InhabitedTime = @as(i64, 0),
+    //     .Heightmaps = .{},
+    //     .sections = comp.get("sections"),
+    //     .entities = &.{},
+    //     .block_ticks = &.{},
+    //     .PostProcessing = @as([24][]i16, @splat(&.{})),
+    //     .DataVersion = @as(i32, 4440),
+    //     .fluid_ticks = &.{},
+    //     .isLightOn = false,
+    // }
+    // var stdout = std.fs.File.stdout();
+    // var outb: [1024]u8 = undefined;
+    // var outw = stdout.writer(&outb);
+    // defer outw.interface.flush() catch {};
+    // try nbt.write(&outw.interface, chunk.chunk, true);
 }
 pub fn writeChunk(
     w: *std.fs.File.Writer,
@@ -358,8 +422,6 @@ pub fn writeChunk(
 
     const offset = 2;
     try w.interface.writeInt(u24, offset, .big);
-    const len = 9;
-    try w.interface.writeInt(u8, len, .big);
     try w.interface.flush();
 
     try w.seekTo(SECTOR_BYTES + index);
@@ -371,7 +433,11 @@ pub fn writeChunk(
 
     try w.interface.flush();
     const length = w.pos - (@as(u64, offset) * SECTOR_BYTES + @sizeOf(i32));
+    const len = std.math.divCeil(u64, length, SECTOR_BYTES) catch unreachable;
     try w.interface.splatByteAll(0, len * SECTOR_BYTES - length - @sizeOf(i32));
+    try w.interface.flush();
+    try w.seekTo(index + 3);
+    try w.interface.writeInt(u8, @intCast(len), .big);
     try w.interface.flush();
     std.debug.print("length: {d}, len: {d}\n", .{ length, len });
     try w.seekTo(@as(usize, offset) * SECTOR_BYTES);
@@ -382,95 +448,95 @@ pub fn writeChunk(
     try w.interface.flush();
 }
 
-pub fn saveChunkToRegion(
-    allocator: std.mem.Allocator,
-    file: *std.fs.File,
-    chunk_x: i32,
-    chunk_z: i32,
-    chunk: anytype,
-) !void {
-    _ = chunk; // autofix
-    const HEADER_BYTES = SECTOR_BYTES * 2;
-
-    // Ensure header exists
-    const stat = try file.stat();
-    if (stat.size < HEADER_BYTES) {
-        try file.setEndPos(HEADER_BYTES);
-        try file.seekTo(0);
-        try file.writeAll(&[_]u8{0} ** HEADER_BYTES);
-    }
-
-    // Local chunk coordinates (0–31)
-    const local_x: u32 = @intCast(@mod(chunk_x, 32));
-    const local_z: u32 = @intCast(@mod(chunk_z, 32));
-    const index: u32 = local_x + local_z * 32;
-
-    std.debug.print("hi4\n", .{});
-    // --- Compress (zlib) ---
-    var compressed = std.Io.Writer.Allocating.init(allocator);
-    defer compressed.deinit();
-    var compress_buf: [std.compress.flate.history_len]u8 = undefined;
-
-    {
-        var compressor = std.compress.flate.Compress.init(&compressed.writer, &compress_buf, .{ .container = .zlib });
-        try compressor.writer.writeAll("hi");
-        std.debug.print("hi5\n", .{});
-        try compressor.writer.flush();
-        std.debug.print("hi7\n", .{});
-
-        // try nbt.write(&compressor.writer, chunk, true);
-        try compressor.end();
-        std.debug.print("hi6\n", .{});
-    }
-
-    const data_len = compressed.written().len + 1; // +1 for compression type
-
-    std.debug.print("hi3\n", .{});
-    // Full chunk payload (length + type + data)
-    var chunk_buf = std.Io.Writer.Allocating.init(allocator);
-    defer chunk_buf.deinit();
-
-    {
-        const w = &chunk_buf.writer;
-        try w.writeInt(u32, @intCast(data_len), .big);
-        try w.writeByte(2); // zlib compression
-        try w.writeAll(compressed.written());
-    }
-
-    // --- Find write position (append at end) ---
-    const file_size = (try file.stat()).size;
-    const sector_offset: u32 = @intCast(file_size / SECTOR_BYTES);
-
-    // Pad to sector alignment
-    const padding = SECTOR_BYTES - (chunk_buf.written().len % SECTOR_BYTES);
-    if (padding != SECTOR_BYTES) {
-        try chunk_buf.writer.splatByteAll(0, padding);
-    }
-
-    const sector_count: u32 = @intCast(chunk_buf.written().len / SECTOR_BYTES);
-
-    // --- Write chunk data ---
-    try file.seekTo(file_size);
-    try file.writeAll(chunk_buf.written());
-
-    std.debug.print("hi1\n", .{});
-    // --- Write location entry ---
-    const location: u32 = (sector_offset << 8) | sector_count;
-
-    {
-        try file.seekTo(index * 4);
-        var w = file.writer(&.{});
-        defer w.interface.flush() catch {};
-        try w.interface.writeInt(u32, location, .big);
-    }
-
-    std.debug.print("hi2\n", .{});
-    // --- Write timestamp ---
-    const timestamp: u32 = @intCast(std.time.timestamp());
-    {
-        try file.seekTo(SECTOR_BYTES + index * 4);
-        var w = file.writer(&.{});
-        defer w.interface.flush() catch {};
-        try w.interface.writeInt(u32, timestamp, .big);
-    }
-}
+// pub fn saveChunkToRegion(
+//     allocator: std.mem.Allocator,
+//     file: *std.fs.File,
+//     chunk_x: i32,
+//     chunk_z: i32,
+//     chunk: anytype,
+// ) !void {
+//     _ = chunk; // autofix
+//     const HEADER_BYTES = SECTOR_BYTES * 2;
+//
+//     // Ensure header exists
+//     const stat = try file.stat();
+//     if (stat.size < HEADER_BYTES) {
+//         try file.setEndPos(HEADER_BYTES);
+//         try file.seekTo(0);
+//         try file.writeAll(&[_]u8{0} ** HEADER_BYTES);
+//     }
+//
+//     // Local chunk coordinates (0–31)
+//     const local_x: u32 = @intCast(@mod(chunk_x, 32));
+//     const local_z: u32 = @intCast(@mod(chunk_z, 32));
+//     const index: u32 = local_x + local_z * 32;
+//
+//     std.debug.print("hi4\n", .{});
+//     // --- Compress (zlib) ---
+//     var compressed = std.Io.Writer.Allocating.init(allocator);
+//     defer compressed.deinit();
+//     var compress_buf: [std.compress.flate.history_len]u8 = undefined;
+//
+//     {
+//         var compressor = std.compress.flate.Compress.init(&compressed.writer, &compress_buf, .{ .container = .zlib });
+//         try compressor.writer.writeAll("hi");
+//         std.debug.print("hi5\n", .{});
+//         try compressor.writer.flush();
+//         std.debug.print("hi7\n", .{});
+//
+//         // try nbt.write(&compressor.writer, chunk, true);
+//         try compressor.end();
+//         std.debug.print("hi6\n", .{});
+//     }
+//
+//     const data_len = compressed.written().len + 1; // +1 for compression type
+//
+//     std.debug.print("hi3\n", .{});
+//     // Full chunk payload (length + type + data)
+//     var chunk_buf = std.Io.Writer.Allocating.init(allocator);
+//     defer chunk_buf.deinit();
+//
+//     {
+//         const w = &chunk_buf.writer;
+//         try w.writeInt(u32, @intCast(data_len), .big);
+//         try w.writeByte(2); // zlib compression
+//         try w.writeAll(compressed.written());
+//     }
+//
+//     // --- Find write position (append at end) ---
+//     const file_size = (try file.stat()).size;
+//     const sector_offset: u32 = @intCast(file_size / SECTOR_BYTES);
+//
+//     // Pad to sector alignment
+//     const padding = SECTOR_BYTES - (chunk_buf.written().len % SECTOR_BYTES);
+//     if (padding != SECTOR_BYTES) {
+//         try chunk_buf.writer.splatByteAll(0, padding);
+//     }
+//
+//     const sector_count: u32 = @intCast(chunk_buf.written().len / SECTOR_BYTES);
+//
+//     // --- Write chunk data ---
+//     try file.seekTo(file_size);
+//     try file.writeAll(chunk_buf.written());
+//
+//     std.debug.print("hi1\n", .{});
+//     // --- Write location entry ---
+//     const location: u32 = (sector_offset << 8) | sector_count;
+//
+//     {
+//         try file.seekTo(index * 4);
+//         var w = file.writer(&.{});
+//         defer w.interface.flush() catch {};
+//         try w.interface.writeInt(u32, location, .big);
+//     }
+//
+//     std.debug.print("hi2\n", .{});
+//     // --- Write timestamp ---
+//     const timestamp: u32 = @intCast(std.time.timestamp());
+//     {
+//         try file.seekTo(SECTOR_BYTES + index * 4);
+//         var w = file.writer(&.{});
+//         defer w.interface.flush() catch {};
+//         try w.interface.writeInt(u32, timestamp, .big);
+//     }
+// }

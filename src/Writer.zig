@@ -70,6 +70,7 @@ pub fn writeDouble(self: Self, val: f64) !void {
 }
 
 pub fn writeString(self: Self, val: []const u8) !void {
+    std.debug.print("writing string: {s}\n", .{val});
     try self.writeShort(@intCast(val.len));
     try self.writer.writeAll(val);
 }
@@ -156,7 +157,7 @@ pub fn innerWrite(w: Self, val: anytype) Error!void {
                         for (val) |v| try w.innerWrite(v);
                     }
                 },
-                .one => try w.innerWrite(val.*),
+                .one => if (@typeInfo(pointer.child) == .array and @typeInfo(pointer.child).array.child == u8 and pointer.is_const) try w.writeString(val) else try w.innerWrite(val.*),
                 else => @compileError("pointers are not supported"),
             }
         },
@@ -173,7 +174,19 @@ pub fn innerWrite(w: Self, val: anytype) Error!void {
                 // }
                 return try val.writeNbt(w);
             }
-            if (s.is_tuple) @compileError("tuple structs are not supported");
+            if (s.is_tuple) {
+                if (s.fields.len >= 1) @compileError("tuple structs are not supported");
+                if (s.fields.len == 0)
+                    try w.writeTagType(.End);
+                // else {
+                //     const arr = s.fields[0];
+                //     if (TagType.fromVal(val).? == .List)
+                //         try w.writeTagType(if (val.len == 0) TagType.fromType(arr.type).? else TagType.fromVal(val[0]).?);
+                //     try w.writeLen(@intCast(val.len));
+                //     inline for (val) |v| try w.innerWrite(v);
+                // }
+                return;
+            }
             if (s.backing_integer) |int| {
                 try w.innerWrite(@as(int, @bitCast(val)));
                 return;
@@ -197,7 +210,7 @@ pub fn innerWrite(w: Self, val: anytype) Error!void {
                     .void => continue,
                     else => {},
                 }
-                if ((!opt or curr != null) and (field.defaultValue() == null or !std.meta.eql(field.defaultValue().?, curr))) {
+                if ((!opt or curr != null)) { // and (field.defaultValue() == null or !std.meta.eql(field.defaultValue().?, curr)) TODO
                     const v = if (opt) curr.? else curr;
                     if (comptime !std.mem.eql(u8, field.name, "trailing\n")) {
                         try w.writeTagType(TagType.fromVal(v).?);

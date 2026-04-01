@@ -54,7 +54,7 @@ pub const TagType = enum(u8) {
         }
         switch (@typeInfo(T)) {
             .pointer => |p| {
-                if (T == []const u8) {
+                if (T == []const u8 or (@typeInfo(p.child) == .array and @typeInfo(p.child).array.child == u8 and p.is_const)) {
                     return .String;
                 }
                 if (p.size == .one) return fromVal(val.*);
