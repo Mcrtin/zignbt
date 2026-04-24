@@ -10,19 +10,16 @@ pub fn FlatUnion(U: type) type {
 
             @setEvalBranchQuota(fields_len * 100);
 
-            var buf: [fields_len]std.builtin.Type.StructField = undefined;
-            var list: std.ArrayList(std.builtin.Type.StructField) = .initBuffer(&buf);
+            var buf: [fields_len][]const u8 = undefined;
+            var list: std.ArrayList([]const u8) = .initBuffer(&buf);
+            var buf2: [fields_len]type = undefined;
+            var list2: std.ArrayList(type) = .initBuffer(&buf2);
 
             const tag_type = @typeInfo(U).@"union".tag_type.?;
             const tag_type_name = @typeName(tag_type);
             const tag_name = tag_type_name[std.mem.lastIndexOfScalar(u8, tag_type_name, '.').? + 1 ..];
-            list.appendAssumeCapacity(.{
-                .type = tag_type,
-                .name = tag_name,
-                .is_comptime = false,
-                .alignment = @alignOf(tag_type),
-                .default_value_ptr = null,
-            });
+            list.appendAssumeCapacity(tag_name);
+            list2.appendAssumeCapacity(tag_type);
 
             for (@typeInfo(U).@"union".fields) |field| {
                 for (@typeInfo(field.type).@"struct".fields) |inner_field| {
@@ -31,21 +28,19 @@ pub fn FlatUnion(U: type) type {
                             if (@typeInfo(item.type).optional.child != inner_field.type) @compileError("mismatched types in FlatUnion " ++ @typeName(U) ++ " at field " ++ inner_field.name);
                             break;
                         }
-                    } else list.appendAssumeCapacity(.{
-                        .type = @Type(.{ .optional = .{ .child = inner_field.type } }),
-                        .name = inner_field.name,
-                        .is_comptime = inner_field.is_comptime,
-                        .alignment = inner_field.alignment,
-                        .default_value_ptr = null,
-                    });
+                    } else {
+                        list.appendAssumeCapacity(inner_field.name);
+                        list2.appendAssumeCapacity(?inner_field.type);
+                    }
                 }
             }
-            break :blk @Type(.{ .@"struct" = .{
-                .fields = list.items,
-                .decls = &.{},
-                .is_tuple = false,
-                .layout = .auto,
-            } });
+            break :blk @Struct(
+                .auto,
+                null,
+                list.items,
+                list2.items,
+                @splat(.{}),
+            );
         };
 
         pub const defaultNbtType = nbt.TagType.Compound;

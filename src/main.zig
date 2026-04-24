@@ -281,7 +281,7 @@ const ChunkAlias = nbt.Value;
 const ChunkLoadResult = struct { offset: u24, len: u8, chunk: ChunkAlias };
 
 pub fn loadChunk(
-    r: *std.fs.File.Reader,
+    r: *std.Io.File.Reader,
     alloc: std.mem.Allocator,
     chunk_x: u5,
     chunk_z: u5,
@@ -317,24 +317,21 @@ pub fn loadChunk(
     unreachable;
 }
 
-pub fn main() !void {
-    var a = std.heap.DebugAllocator(.{}){};
-    defer _ = a.deinit();
-    const gpa = a.allocator();
-    var args = std.process.args();
+pub fn main(init: std.process.Init) !void {
+    var args = try init.minimal.args.iterateAllocator(init.gpa);
     _ = args.skip();
-    const f = try std.fs.cwd().openFile(args.next().?, .{});
-    defer f.close();
+    const f = try std.Io.Dir.cwd().openFile(init.io, args.next().?, .{});
+    defer f.close(init.io);
     var rbuf: [1024]u8 = undefined;
-    var r = f.reader(&rbuf);
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var r = f.reader(init.io, &rbuf);
+    var arena = std.heap.ArenaAllocator.init(init.gpa);
 
     defer arena.deinit();
     const alloc = arena.allocator();
-    var f2 = try std.fs.cwd().createFile(args.next().?, .{});
-    defer f2.close();
+    var f2 = try std.Io.Dir.cwd().createFile(init.io, args.next().?, .{});
+    defer f2.close(init.io);
     var wbuf: [1024]u8 = undefined;
-    var w = f2.writer(&wbuf);
+    var w = f2.writer(init.io, &wbuf);
     defer w.interface.flush() catch {};
     const chunk = (try loadChunk(&r, alloc, 0, 0)).?;
     std.debug.print("offset: {d} loc: {d}\n", .{ chunk.offset, chunk.len });
@@ -346,7 +343,7 @@ pub fn main() !void {
 
     const comp = chunk.chunk.Compound;
     std.debug.print("idk: {any}\n", .{comp.get("sections").?.List[0].Compound.keys()});
-    try writeChunk(&w, 0, 0, @as(InnerChunk, .{
+    try writeChunk(init.io, &w, 0, 0, @as(InnerChunk, .{
         .Status = .@"minecraft:full",
         .zPos = @as(i32, 0),
         .block_entities = &.{},
@@ -411,7 +408,8 @@ pub fn main() !void {
     // try nbt.write(&outw.interface, chunk.chunk, true);
 }
 pub fn writeChunk(
-    w: *std.fs.File.Writer,
+    io: std.Io,
+    w: *std.Io.File.Writer,
     chunk_x: u5,
     chunk_z: u5,
     // offset: u24,
@@ -425,7 +423,7 @@ pub fn writeChunk(
     try w.interface.flush();
 
     try w.seekTo(SECTOR_BYTES + index);
-    try w.interface.writeInt(i32, @intCast(std.math.clamp(@divFloor(std.time.milliTimestamp(), 1000), std.math.minInt(i32), std.math.maxInt(i32))), .big);
+    try w.interface.writeInt(i32, @intCast(std.Io.Clock.real.now(io).toMilliseconds()), .big);
     try w.interface.flush();
     try w.seekTo(@as(usize, offset) * SECTOR_BYTES + @sizeOf(i32) + @sizeOf(Compression));
 
